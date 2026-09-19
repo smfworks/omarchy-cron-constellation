@@ -494,10 +494,19 @@ print the clock in the zone the probe already used.
 
 ## Appendix — tests run on this agent
 
+Round 1 (pre–Honest sky):
+
 ```
 python3 -m pytest tests -q
-...................................................                      [100%]
 51 passed in 0.26s
+```
+
+Round 2 / Honest sky (this PR):
+
+```
+python3 -m pytest tests -q
+..............................................................           [100%]
+62 passed in 0.23s
 
 node tests/test_constellation_logic.js
 ok - ConstellationLogic helpers

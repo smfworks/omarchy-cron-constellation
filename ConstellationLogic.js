@@ -123,16 +123,20 @@ function parseSnapshot(text) {
   if (raw === "")
     return errorSnapshot("empty probe")
   try {
-    var parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== "object")
+    var source = JSON.parse(raw)
+    if (!source || typeof source !== "object")
       return errorSnapshot("invalid snapshot")
-    parsed = copySnapshot(parsed)
+    var hadOk = Object.prototype.hasOwnProperty.call(source, "ok")
+    var parsed = copySnapshot(source)
     parsed.error = parsed.error ? String(parsed.error) : ""
     parsed.stale = parsed.stale === true
     parsed.busy = parsed.busy === true
     parsed.profileCount = number(parsed.profileCount)
-    // Missing ok is not success. A present home with ok omitted is unread.
-    parsed.ok = parsed.ok === true
+    // Missing ok is not success. copySnapshot inherits demo ok:true — drop it.
+    if (parsed.present === true)
+      parsed.ok = hadOk && source.ok === true
+    else
+      parsed.ok = parsed.ok === true
     if (parsed.error && parsed.present !== true) {
       parsed.demo = false
       parsed.present = false
@@ -514,7 +518,7 @@ function windowLine(snapshot) {
 
 function formatClock(iso) {
   // Display the clock already localized on the ISO string (probe --tz).
-  // Never Date#getHours() — that is the Quickshell host zone, not the window.
+  // Do not convert through the host Date — that is Quickshell local, not the window.
   if (!iso)
     return ""
   var m = String(iso).match(/T(\d{2}:\d{2})/)
