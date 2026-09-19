@@ -9,6 +9,8 @@ status, tokens, and USD **only when Hermes stored one**.
 Plugin id: `smf.cron-constellation`. Twin of the Hermes Desktop digest
 [SMF Cron Night](https://github.com/smfworks/smf-cron-night). Companion to
 [Neural Pulse](https://github.com/smfworks/omarchy-neural-pulse).
+Adversarial review of whether the starfield is screenshot-trustworthy:
+[docs/OPPOSITION.md](docs/OPPOSITION.md).
 
 ## Requirements
 
