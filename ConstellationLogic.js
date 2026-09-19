@@ -2,7 +2,8 @@
 
 // Cron Constellation helpers. Cost is never estimated here: USD is shown
 // only when Hermes stored actual_cost_usd (labeled) or estimated_cost_usd
-// (labeled ~$). Partial nights never render a bare dollar total.
+// (labeled ~$). Partial nights never render a bare dollar total. Star size
+// uses recorded usd only — estimates never scale the sky.
 
 var POLL_MS = 8000
 var FRAME_MS = 80
@@ -37,6 +38,7 @@ function emptyTotals() {
   return {
     runs: 0,
     failed: 0,
+    unknown: 0,
     running: 0,
     tokens: null,
     usd: null,
@@ -103,6 +105,8 @@ function copySnapshot(snapshot) {
     next.summary = emptyTotals()
   if (!next.window || typeof next.window !== "object")
     next.window = emptyWindow()
+  if (typeof next.summary.unknown !== "number" || !isFinite(next.summary.unknown))
+    next.summary.unknown = 0
   return next
 }
 
@@ -119,14 +123,20 @@ function parseSnapshot(text) {
   if (raw === "")
     return errorSnapshot("empty probe")
   try {
-    var parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== "object")
+    var source = JSON.parse(raw)
+    if (!source || typeof source !== "object")
       return errorSnapshot("invalid snapshot")
-    parsed = copySnapshot(parsed)
+    var hadOk = Object.prototype.hasOwnProperty.call(source, "ok")
+    var parsed = copySnapshot(source)
     parsed.error = parsed.error ? String(parsed.error) : ""
     parsed.stale = parsed.stale === true
     parsed.busy = parsed.busy === true
     parsed.profileCount = number(parsed.profileCount)
+    // Missing ok is not success. copySnapshot inherits demo ok:true — drop it.
+    if (parsed.present === true)
+      parsed.ok = hadOk && source.ok === true
+    else
+      parsed.ok = parsed.ok === true
     if (parsed.error && parsed.present !== true) {
       parsed.demo = false
       parsed.present = false
@@ -142,7 +152,6 @@ function parseSnapshot(text) {
     }
     parsed.demo = false
     parsed.present = true
-    parsed.ok = parsed.ok !== false
     return parsed
   } catch (e) {
     return errorSnapshot("invalid snapshot")
@@ -165,20 +174,37 @@ function mergeProbe(current, text) {
   return next && next.error ? next : errorSnapshot("probe failed")
 }
 
+function hasProbeErrors(snapshot) {
+  if (!snapshot)
+    return false
+  if (snapshot.error)
+    return true
+  return Array.isArray(snapshot.errors) && snapshot.errors.length > 0
+}
+
+function readFailed(snapshot) {
+  if (!snapshot)
+    return true
+  if (snapshot.ok === false)
+    return true
+  var read = String(snapshot.read_status || "")
+  if (read === "unread" || read === "partial")
+    return true
+  return hasProbeErrors(snapshot)
+}
+
 function barMode(snapshot) {
   if (!snapshot)
     return "demo"
   if (snapshot.stale === true)
     return "stale"
-  if (snapshot.error && snapshot.present !== true)
-    return "err"
-  if (snapshot.present === true && snapshot.ok === false && snapshot.read_status === "unread")
-    return "err"
-  if (snapshot.error && snapshot.present !== true)
-    return "err"
-  if (snapshot.present !== true)
+  if (snapshot.present !== true) {
+    if (snapshot.error)
+      return "err"
     return "demo"
-  if (snapshot.ok === false && (!snapshot.runs || snapshot.runs.length === 0) && snapshot.read_status === "unread")
+  }
+  // Any unread / partial / ok:false / errors[] is not an unmarked live sky.
+  if (readFailed(snapshot))
     return "err"
   return "live"
 }
@@ -200,11 +226,79 @@ function failCount(snapshot) {
   return Math.max(0, Math.round(number(snapshot.summary.failed)))
 }
 
+function unknownCount(snapshot) {
+  if (!snapshot || !snapshot.summary)
+    return 0
+  return Math.max(0, Math.round(number(snapshot.summary.unknown)))
+}
+
+function runningCount(snapshot) {
+  if (!snapshot || !snapshot.summary)
+    return 0
+  return Math.max(0, Math.round(number(snapshot.summary.running)))
+}
+
 function showFailChip(snapshot) {
   var mode = barMode(snapshot)
   if (mode === "demo" || mode === "err")
     return false
   return failCount(snapshot) > 0
+}
+
+function showRunChip(snapshot) {
+  var mode = barMode(snapshot)
+  if (mode === "demo" || mode === "err")
+    return false
+  return runningCount(snapshot) > 0
+}
+
+function isQuietEmpty(snapshot) {
+  if (!snapshot || snapshot.present !== true)
+    return false
+  if (snapshot.stale === true || readFailed(snapshot))
+    return false
+  if (snapshot.runs && snapshot.runs.length > 0)
+    return false
+  return true
+}
+
+function emptyNightCopy(snapshot) {
+  if (!isQuietEmpty(snapshot))
+    return ""
+  return "Nothing ran in this overnight window."
+}
+
+function headerCaption(snapshot) {
+  var mode = barMode(snapshot)
+  if (mode === "err" || mode === "stale" || mode === "demo")
+    return statusLine(snapshot)
+  var win = windowLine(snapshot)
+  return win || statusLine(snapshot)
+}
+
+function headerTone(snapshot) {
+  if (failCount(snapshot) > 0)
+    return "fail"
+  var mode = barMode(snapshot)
+  if (mode === "err" || mode === "stale")
+    return "err"
+  if (unknownCount(snapshot) > 0)
+    return "unknown"
+  if (runningCount(snapshot) > 0)
+    return "run"
+  return "ok"
+}
+
+function firstError(snapshot) {
+  if (!snapshot)
+    return ""
+  if (snapshot.error)
+    return String(snapshot.error)
+  if (Array.isArray(snapshot.errors) && snapshot.errors.length > 0) {
+    var rec = snapshot.errors[0] || {}
+    return String(rec.error || rec.kind || "unread cron storage")
+  }
+  return ""
 }
 
 function hashString(text) {
@@ -228,7 +322,9 @@ function starKind(status) {
     return "ok"
   if (s === "running" || s === "claimed")
     return "run"
-  return "fail"
+  if (s === "failed")
+    return "fail"
+  return "unknown"
 }
 
 function recordedUsd(run) {
@@ -248,10 +344,7 @@ function estimatedUsd(run) {
 }
 
 function sizeUsd(run) {
-  var actual = recordedUsd(run)
-  if (actual != null)
-    return actual
-  return estimatedUsd(run)
+  return recordedUsd(run)
 }
 
 function maxSizeUsd(runs) {
@@ -394,10 +487,16 @@ function summaryLine(snapshot) {
   var n = Math.round(number(summary.runs))
   var failed = Math.round(number(summary.failed))
   var bits = [String(n), failed + " failed"]
+  var unknown = Math.round(number(summary.unknown))
+  if (unknown > 0)
+    bits.push(unknown + " unknown")
   var running = Math.round(number(summary.running))
   if (running > 0)
     bits.push(running + " running")
   bits.push(costLine(snapshot))
+  var profiles = Math.round(number(snapshot.profileCount))
+  if (profiles > 1)
+    bits.push(profiles + " profiles")
   return bits.join(" · ")
 }
 
@@ -418,16 +517,12 @@ function windowLine(snapshot) {
 }
 
 function formatClock(iso) {
+  // Display the clock already localized on the ISO string (probe --tz).
+  // Do not convert through the host Date — that is Quickshell local, not the window.
   if (!iso)
     return ""
-  var d = new Date(iso)
-  if (isNaN(d.getTime())) {
-    var m = String(iso).match(/T(\d{2}:\d{2})/)
-    return m ? m[1] : ""
-  }
-  var hh = ("0" + d.getHours()).slice(-2)
-  var mm = ("0" + d.getMinutes()).slice(-2)
-  return hh + ":" + mm
+  var m = String(iso).match(/T(\d{2}:\d{2})/)
+  return m ? m[1] : ""
 }
 
 function runStatus(run) {
@@ -478,12 +573,13 @@ function statusLine(snapshot) {
   if (mode === "stale")
     return "Stale · last probe failed"
   if (mode === "err")
-    return "Error · " + (snapshot.error || "could not read cron storage")
+    return "Error · " + (firstError(snapshot) || "could not read cron storage")
   if (mode === "demo")
     return "Demo idle · no Hermes cron home"
   var summary = snapshot.summary || emptyTotals()
   var n = Math.round(number(summary.runs))
   var failed = Math.round(number(summary.failed))
+  var unknown = Math.round(number(summary.unknown))
   var running = Math.round(number(summary.running))
   var label = snapshot.window && snapshot.window.label ? snapshot.window.label : "Last night"
   if (n === 0)
@@ -494,6 +590,8 @@ function statusLine(snapshot) {
     return label + " · " + failed + " failed"
   if (running > 0)
     return label + " · " + running + " still running"
+  if (unknown > 0)
+    return label + " · " + unknown + " unknown"
   return label + " · " + n + " run" + (n === 1 ? "" : "s")
 }
 

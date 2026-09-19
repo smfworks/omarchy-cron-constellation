@@ -20,10 +20,12 @@ BarWidget {
     ? panelLoader.item.stars
     : Sky.demoStars()
   readonly property bool skyFailChip: panelLoader.item ? panelLoader.item.showFailChip === true : false
+  readonly property bool skyRunChip: panelLoader.item ? panelLoader.item.showRunChip === true : false
   readonly property int skyFailCount: panelLoader.item ? Number(panelLoader.item.failCount || 0) : 0
+  readonly property int skyRunCount: panelLoader.item ? Number(panelLoader.item.runCount || 0) : 0
   readonly property bool skyMuted: skyBarLabel !== ""
 
-  readonly property color starOk: Qt.rgba(0.38, 0.90, 0.58, 1)
+  readonly property color starOk: Color.accent
   readonly property color starFail: (bar && bar.urgent) ? bar.urgent : Color.urgent
   readonly property color starRun: Color.accent
   readonly property color starDim: bar ? bar.foreground : Color.foreground
@@ -112,7 +114,7 @@ BarWidget {
       ctx.fill()
 
       ctx.beginPath()
-      ctx.fillStyle = root.cssColor(Qt.rgba(1, 1, 1, 1), muted ? 0.18 : 0.55)
+      ctx.fillStyle = root.cssColor(color, muted ? 0.12 : 0.32)
       ctx.arc(x, y, Math.max(0.6, radius * 0.32), 0, Math.PI * 2)
       ctx.fill()
     }
@@ -205,6 +207,29 @@ BarWidget {
         id: chipLabel
         anchors.centerIn: parent
         text: String(root.skyFailCount)
+        color: root.skyForeground
+        font.family: bar ? bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+    }
+
+    Rectangle {
+      z: 3
+      visible: root.skyRunChip
+      anchors.left: parent.left
+      anchors.top: parent.top
+      anchors.leftMargin: Style.space(4)
+      anchors.topMargin: Style.space(3)
+      width: runChipLabel.implicitWidth + Style.space(8)
+      height: runChipLabel.implicitHeight + Style.space(2)
+      radius: height / 2
+      color: Qt.rgba(root.starRun.r, root.starRun.g, root.starRun.b, 0.88)
+
+      Text {
+        id: runChipLabel
+        anchors.centerIn: parent
+        text: String(root.skyRunCount)
         color: root.skyForeground
         font.family: bar ? bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption

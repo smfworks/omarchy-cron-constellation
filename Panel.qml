@@ -27,13 +27,23 @@ Panel {
   readonly property bool demo: Sky.barMode(snapshot) === "demo"
   readonly property string barLabel: Sky.barLabel(snapshot)
   readonly property bool showFailChip: Sky.showFailChip(snapshot)
+  readonly property bool showRunChip: Sky.showRunChip(snapshot)
   readonly property int failCount: Sky.failCount(snapshot)
+  readonly property int runCount: Sky.runningCount(snapshot)
   readonly property string statusLine: Sky.statusLine(snapshot)
   readonly property string summaryText: Sky.summaryLine(snapshot)
   readonly property string windowText: Sky.windowLine(snapshot)
+  readonly property string headerPrimary: Sky.headerCaption(snapshot)
+  readonly property string emptyCopy: Sky.emptyNightCopy(snapshot)
+  readonly property string headerTone: Sky.headerTone(snapshot)
+  readonly property color summaryPaint: headerTone === "fail"
+    ? starFail
+    : (headerTone === "err" || headerTone === "unknown"
+      ? dim
+      : (headerTone === "run" ? glow : starOk))
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property color starOk: Qt.rgba(0.38, 0.90, 0.58, 1)
+  readonly property color starOk: Color.accent
   readonly property color starFail: (bar && bar.urgent) ? bar.urgent : Color.urgent
   readonly property color glow: Color.accent
   readonly property color glass: Color.popups && Color.popups.background ? Color.popups.background : Color.background
@@ -51,8 +61,18 @@ Panel {
   }
 
   function toggle() {
-    if (root.opened) root.close()
-    else root.open()
+    if (root.opened) {
+      root.close()
+      return
+    }
+    setCenterHoverRevealSuppressed(true)
+    root.controller.show()
+    root.refresh()
+  }
+
+  function closeForPopoutSwitch() {
+    setCenterHoverRevealSuppressed(false)
+    root.controller.hide()
   }
 
   function switchPanel(direction) {
@@ -67,9 +87,19 @@ Panel {
   }
 
   function refresh() {
-    if (probe.running)
+    if (probe.running) {
+      if (root.snapshot && root.snapshot.present === true && root.snapshot.stale !== true)
+        root.applyStale("probe still running")
       return
+    }
     probe.running = true
+  }
+
+  function applyStale(message) {
+    var next = Sky.markStale(root.snapshot, message || "probe failed")
+    root.snapshot = next
+    root.runs = next && next.present === true ? (next.runs || []) : []
+    root.stars = Sky.starsFromSnapshot(next)
   }
 
   function applyProbe(text) {
@@ -91,8 +121,10 @@ Panel {
     var kind = Sky.starKind(run && run.status)
     if (kind === "ok") return root.starOk
     if (kind === "run") return root.glow
-    return root.starFail
+    if (kind === "fail") return root.starFail
+    return root.dim
   }
+
 
   Process {
     id: probe
@@ -153,7 +185,7 @@ Panel {
           radius: Style.cornerRadius
           color: root.accentFill(root.glow, 0.08)
           border.width: 1
-          border.color: root.accentFill(root.starOk, 0.35)
+          border.color: root.accentFill(root.glow, 0.35)
 
           Column {
             id: headerColumn
@@ -176,7 +208,7 @@ Panel {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: root.windowText !== "" ? root.windowText : root.statusLine
+              text: root.headerPrimary
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -187,7 +219,7 @@ Panel {
               wrapMode: Text.WordWrap
               visible: root.hermesPresent && root.summaryText !== ""
               text: root.summaryText
-              color: root.failCount > 0 ? root.starFail : root.starOk
+              color: root.summaryPaint
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
@@ -198,7 +230,7 @@ Panel {
           width: parent.width - Style.space(32)
           visible: root.demo
           wrapMode: Text.WordWrap
-          text: "Idle demo. The bar shows DEMO until Cron Constellation can read Hermes cron storage (jobs.json, executions.db, usage_audit.jsonl, output/, state.db source=cron). USD is shown only when Hermes stored a cost."
+          text: "DEMO. The bar stays labeled DEMO until Cron Constellation opens real cron storage (cron/ or state.db). A lone .env or config.yaml is not a home. Dim demo stars are not last night. USD is shown only when Hermes stored a cost — estimates never size the sky."
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -283,8 +315,8 @@ Panel {
         }
 
         Text {
-          visible: root.hermesPresent && root.runs.length === 0
-          text: "Nothing ran in this overnight window."
+          visible: root.emptyCopy !== ""
+          text: root.emptyCopy
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.body

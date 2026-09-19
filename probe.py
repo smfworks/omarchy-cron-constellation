@@ -43,9 +43,12 @@ _STATUS_FAILED = frozenset({
 _STATUS_RUNNING = frozenset({"running"})
 _STATUS_CLAIMED = frozenset({"claimed"})
 _STATUS_UNKNOWN = frozenset({"unknown"})
-_TERMINAL_FAILED = frozenset({"failed", "unknown"})
+_TERMINAL_FAILED = frozenset({"failed"})
 
-_HOME_MARKERS = ("config.yaml", "cron", "state.db", ".env")
+# A Hermes cron home is opened storage, not a leftover .env / config.yaml.
+# Neural Pulse requires an opened state.db; we require cron/ or state.db.
+_HOME_MARKERS = ("cron", "state.db")
+SQLITE_TIMEOUT = 1.5
 
 
 # ---------------------------------------------------------------------------
@@ -332,13 +335,33 @@ def schedule_display(job: Dict[str, Any]) -> str:
 # Homes + file IO
 # ---------------------------------------------------------------------------
 
+def _contained(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _is_hermes_home(path: Path) -> bool:
+    """True only when cron storage or state.db is present.
+
+    ``.env`` or ``config.yaml`` alone is not a home — that is DEMO, not a
+    live quiet night.
+    """
     try:
         if not path.is_dir():
             return False
     except OSError:
         return False
-    return any((path / marker).exists() for marker in _HOME_MARKERS)
+    try:
+        if (path / "cron").is_dir():
+            return True
+        if (path / "state.db").is_file():
+            return True
+    except OSError:
+        return False
+    return False
 
 
 def user_home(environ: Optional[dict] = None) -> Path:
@@ -451,7 +474,8 @@ def load_usage_audit(
                     continue
                 try:
                     rec = json.loads(line)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    _record_error(errors, kind="usage_audit.jsonl", path=path, error=exc)
                     continue
                 if isinstance(rec, dict):
                     rows.append(rec)
@@ -468,7 +492,7 @@ def load_executions_db(
     if not path.is_file():
         return []
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=SQLITE_TIMEOUT)
         conn.execute("PRAGMA query_only = ON")
     except sqlite3.Error as exc:
         _record_error(errors, kind="executions.db", path=path, error=exc)
@@ -508,7 +532,7 @@ def load_cron_sessions(
     if not path.is_file():
         return []
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=SQLITE_TIMEOUT)
         conn.execute("PRAGMA query_only = ON")
     except sqlite3.Error as exc:
         _record_error(errors, kind="state.db", path=path, error=exc)
@@ -564,8 +588,20 @@ def load_output_runs(
     except OSError as exc:
         _record_error(errors, kind="output", path=output_dir, error=exc)
         return []
+    try:
+        output_root = output_dir.resolve()
+    except OSError:
+        output_root = output_dir
     for job_dir in job_dirs:
         if not job_dir.is_dir() or job_dir.name.startswith("."):
+            continue
+        if not _contained(job_dir, output_root):
+            _record_error(
+                errors,
+                kind="output",
+                path=job_dir,
+                error="output path escaped cron/output/",
+            )
             continue
         try:
             files = list(job_dir.iterdir())
@@ -870,6 +906,11 @@ def collect_home_runs(
         job_id = str(job.get("id") or "")
         if job_id and job_id in jobs_with_history:
             continue
+        last_err = job.get("last_error") or job.get("last_delivery_error")
+        last_status = normalize_status(job.get("last_status"))
+        # A last_run_at pointer is not a ledger row. Only paint failed when
+        # the pointer itself recorded a failure; last_status=ok is unknown.
+        pointer_status = "failed" if last_err or last_status == "failed" else "unknown"
         raw_rows.append({
             "id": f"last:{job.get('id')}:{job.get('last_run_at')}",
             "job_id": job.get("id"),
@@ -877,8 +918,8 @@ def collect_home_runs(
             "schedule": schedule_display(job),
             "last_run_at": job.get("last_run_at"),
             "started_at": job.get("last_run_at"),
-            "status": job.get("last_status"),
-            "error": job.get("last_error") or job.get("last_delivery_error"),
+            "status": pointer_status,
+            "error": last_err,
             "profile": profile,
             "home": home_label,
         })
@@ -912,7 +953,8 @@ def _hung_into_window(
     if finished is not None:
         return False
     if started is None:
-        return True
+        # No start stamp cannot prove this is overnight hung work.
+        return False
     return started < end
 
 
@@ -927,7 +969,9 @@ def filter_runs_in_window(
     for run in runs:
         started = parse_datetime(run.get("started_at"), default_tz=default_tz)
         finished = parse_datetime(run.get("finished_at"), default_tz=default_tz)
-        if in_window(started, start, end) or in_window(finished, start, end):
+        # Overnight attempt = started in-window. A daytime job that only
+        # *finished* after 18:00 is not last night's cron.
+        if in_window(started, start, end):
             out.append(run)
             continue
         if _hung_into_window(run, end, started=started, finished=finished):
@@ -941,6 +985,7 @@ def filter_runs_in_window(
 
 def summarize_runs(runs: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     failed = 0
+    unknown = 0
     running = 0
     token_sum = 0
     token_any = False
@@ -948,10 +993,10 @@ def summarize_runs(runs: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     usd_billed = 0
     for run in runs:
         status = run.get("status")
-        if status in _TERMINAL_FAILED or status == "failed":
+        if status == "failed" or (status is None and run.get("error")):
             failed += 1
-        elif status is None and run.get("error"):
-            failed += 1
+        elif status is None or status == "unknown":
+            unknown += 1
         if status in ("running", "claimed"):
             running += 1
         tokens = run.get("tokens")
@@ -977,6 +1022,7 @@ def summarize_runs(runs: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "runs": n,
         "failed": failed,
+        "unknown": unknown,
         "running": running,
         "tokens": token_sum if token_any else None,
         "usd": usd_total,
@@ -1020,6 +1066,9 @@ def night_payload(
             rec.setdefault("home", profile)
 
     windowed = filter_runs_in_window(all_runs, start, end, default_tz=zone)
+    for run in windowed:
+        if run.get("status") is None:
+            run["status"] = "unknown"
     summary = summarize_runs(windowed)
     if errors:
         read_status = "partial" if windowed else "unread"
@@ -1043,7 +1092,7 @@ def night_payload(
         "homes": home_labels,
         "errors": errors,
         "source": "disk",
-        "degraded": False,
+        "degraded": bool(errors),
     }
 
 
@@ -1051,6 +1100,7 @@ def empty_totals() -> Dict[str, Any]:
     return {
         "runs": 0,
         "failed": 0,
+        "unknown": 0,
         "running": 0,
         "tokens": None,
         "usd": None,

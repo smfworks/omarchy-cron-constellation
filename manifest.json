@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "smf.cron-constellation",
   "name": "Cron Constellation",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "SMF Works",
   "license": "MIT",
-  "description": "Futuristic Omarchy bar widget: last night's Hermes cron runs as a starfield — green ok, red fail, size from recorded cost — with a nested constellation panel.",
+  "description": "Overnight Hermes cron starfield. DEMO/ERR/STALE are labeled. Star size is recorded USD only. Unread is not a quiet night.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "BarWidget.qml"

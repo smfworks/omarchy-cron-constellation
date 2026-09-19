@@ -19,10 +19,100 @@ that.
 
 ---
 
+## Round 2 / Honest sky
+
+Product follow-up after the Round 1 review at `1f0ad76` / opposition `a1e0070`.
+Honest sky changes the **face contract** the way Honest night and Honest pulse
+did: a screenshot must be able to disprove itself. It does **not** make the
+starfield overnight-ops truth. Profile ACL, dual-home leakage, the 120s merge
+miss, and a permanent 8s/`python3` walk are still open.
+
+### What was still open on main (before this PR)
+
+Confirmed against the tree at `a1e0070` (docs-only opposition) + `1f0ad76`
+(v0.1.0 face). Every P0 below was still unfixed. High-value P1s that still
+broke a morning glance are listed after.
+
+| ID | Status on main | Why the sky could not be trusted |
+|----|----------------|----------------------------------|
+| **P0.1** unread / partial → live green | **Unfixed** | `barMode` only returned `"err"` when unread *and* there were no runs. Parent `last_status=ok` + kid `{not json` → `read_status: "partial"`, unmarked live, green star. Panel preferred `windowText` over `statusLine`, then “Nothing ran in this overnight window.” `parseSnapshot` coerced missing `ok` to success. |
+| **P0.2** window face ≠ probe TZ | **Unfixed** | `formatClock` used `Date#getHours()` in the Quickshell/JS zone. UTC host + `--tz America/Los_Angeles` painted `Last night · 01:00 → 15:00 · America/Los_Angeles`. Filter leftovers: daytime `finished_at` 18:01 counted as overnight; hung rows with no `started_at` always kept. |
+| **P0.3** star size invents a bill | **Unfixed** | `sizeUsd` fell back to `estimatedUsd`. Caption `cost unknown`, stars 0.28 vs 1.0. |
+| **P0.4** status face ≠ ledger | **Unfixed** | `starKind(null\|unknown\|timeout)` → red `"fail"` while `summarize_runs` counted `status is None` as 0 failed and `unknown` as failed (`_TERMINAL_FAILED`). No running chip. Header went mint on an audit-only night. |
+| **P1** `.env` / `config.yaml` leaves DEMO | **Unfixed** | `_HOME_MARKERS` included both. Empty dir was DEMO; a lone `.env` was a live quiet night. |
+| **P1** bad `usage_audit.jsonl` lines | **Unfixed** | Skipped with `ok: true`, `errors: []`. |
+| **P1** no profile count on header | **Unfixed** | README promised `N profiles`. `summaryLine` never appended it. |
+| **P1** hardcoded mint + white cores | **Unfixed** | `Qt.rgba(0.38, 0.90, 0.58, 1)` and `Qt.rgba(1,1,1,1)` on every star. Honest pulse had already moved to `Color.accent`. |
+| **P1** SQLite timeout / hung probe | **Unfixed** | `sqlite3.connect` had no timeout. `refresh()` no-op while `probe.running` → frozen live sky, not STALE. |
+| **P1** `degraded` always false | **Unfixed** | Partial unread could not be consumed as degraded. |
+| **P1** QML leftovers | **Unfixed** | `closeForPopoutSwitch` missing on `Panel.qml`; `toggle()` never set `centerHoverRevealSuppressed` true. |
+
+Still **closed** from Round 1 §7 (do not redo): single aggregator, 18:00 window
+move, `--tz` on the probe, no token→USD table, probe-side unknown≠completed,
+hung 17:00 spillover kept, `last_run_at` skipped when history exists, DEMO/ERR/
+STALE glyphs *existed* (and then lied — see P0.1).
+
+### Argue against trusting the starfield *again*
+
+I would still not hand a Spark morning to this widget. Honest sky stops the
+screenshot from saying “all green” when the ledger was unread, when the clock
+was in the wrong zone, or when star size was an estimate. It does not stop a
+union of every local profile from leaking kid-home snippets next to parent
+job names. It does not merge an unfinished 21:00 execution with an audit line
+180s later. It does not prove a `last_run_at` pointer never happened — it only
+refuses to paint that pointer **completed**. A hung job from August that still
+says `running` is still a star. `python3` still walks every home every 8s.
+There is still no CI workflow in-tree as I write this section.
+
+Treat **ERR / STALE / DEMO** as the only screenshot-safe sentences. An unmarked
+sky means “last probe returned `ok: true` with no `errors[]`,” not “the night
+was fine.”
+
+### What this PR closes (Honest sky)
+
+| Item | What changed |
+|------|----------------|
+| **P0.1 unread / partial** | `barMode`: any `ok === false`, `read_status` unread/partial, `error`, or `errors[]` is **ERR**, including parent-ok + kid-corrupt. `parseSnapshot` no longer coerces missing `ok` to success. `headerCaption` surfaces `statusLine` on err/stale/demo (never hides behind `windowText`). `emptyNightCopy` only when `isQuietEmpty` (`ok === true && read_status === "ok" && !errors && runs.length === 0`). |
+| **P0.2 clock / window leftovers** | `formatClock` slices `T(\d{2}:\d{2})` from the already-localized ISO. No `Date#getHours()`. Filter keeps **started** in-window or hung `running`/`claimed` with a start stamp before window end. Daytime finish-after-18:00 dropped. Hung with `started_at is None` dropped. |
+| **P0.3 star size** | `sizeUsd` = recorded `usd` only. Estimates may label a panel row `~$`; they never scale the bar. |
+| **P0.4 status face** | `starKind(null\|unknown\|timeout)` → `"unknown"` (dim). `summarize_runs` counts `unknown` separately; fail chip is `failed` only. Running chip when `summary.running > 0`. Header tone is not accent-mint when stars are unknown/red. Audit-only `status is None` becomes `unknown` on the payload. `last_run_at` + `last_status=ok` is **unknown**, not completed. |
+| **P1 present** | `_HOME_MARKERS = ("cron", "state.db")`. `.env` / `config.yaml` alone is DEMO. |
+| **P1 audit lines** | Bad JSONL records `errors[]` (`ok: false`, `degraded: true`). |
+| **P1 header profiles** | `summaryLine` appends `N profiles` when `profileCount > 1`. |
+| **P1 theme** | `starOk` / header border use `Color.accent`. Star cores use the star color, not hardcoded white. |
+| **P1 probe hang** | SQLite `timeout=1.5`. If `refresh()` hits a still-running probe, the face is **STALE**, not yesterday-as-live. |
+| **P1 QML** | `closeForPopoutSwitch` defined on `Panel.qml`. IPC/hotkey `toggle()` sets `centerHoverRevealSuppressed` true without going through click-`open()`. |
+| **Tests** | Node: clock digits, partial≠live, estimated size = `EQUAL_SIZE`, unknown≠fail, unread≠“Nothing ran…”, missing `ok`≠quiet. Pytest: `.env`/yaml-only DEMO, audit bad line, daytime 18:01 spill, hung without start, parent+kid partial, pointer≠completed, unknown summary, timeout constant. |
+
+### Still open after Honest sky
+
+- **Profile ACL** — union is labeled (`N profiles`, `[kid]`), not locked down.
+  Sibling homes still leak names and 240-char snippets.
+- **120s merge miss** — unfinished long job vs audit `ts` 180s later is still
+  two rows.
+- **`normalize_cost` key `"total"`** still binds an unrelated total as tokens.
+- **Weeks-old hung rows** with a real `started_at` are still kept (they are
+  still `running`). No age cap.
+- **Exclusive 08:00:00 end** still drops an 08:00:00 tick.
+- **Polling / Canvas** — 8s full walk, 80ms `requestPaint`, no inotify, DEMO
+  does not back off.
+- **CI** — still no `.github` workflow. Local `pytest` + `node` are the proof.
+- **`preview.png` / `qmllint` in the install path** — README mentions qmllint;
+  the repo still has no preview asset.
+- **Output symlink refusal** is best-effort (`Path.resolve` prefix). Home
+  discovery still `resolve()`s profile dirs.
+- **No vertical-specific star layout.**
+
+Do not screenshot this and call the night fine. Do screenshot **ERR**,
+**STALE**, or **DEMO** and believe those words.
+
+---
+
 ## Cross-check — fixed there, still broken here
 
-From `smf-cron-night` `docs/OPPOSITION.md` (Honest night + Round 2) and
-`omarchy-neural-pulse` `docs/OPPOSITION.md` (Honest pulse).
+Round 1 snapshot (pre–Honest sky). See **Round 2 / Honest sky** above for what
+this PR closed. From `smf-cron-night` `docs/OPPOSITION.md` (Honest night +
+Round 2) and `omarchy-neural-pulse` `docs/OPPOSITION.md` (Honest pulse).
 
 | Lesson | Cron Night / Neural Pulse | Still in Constellation? |
 |--------|---------------------------|-------------------------|
@@ -325,6 +415,9 @@ is fail — including raw strings if they ever skip `normalize_status`.
 
 ## 6. Suggested next ship (one concrete fix PR)
 
+**Shipped in this tree as Honest sky** (scope expanded: P0.1–P0.4 + high-value
+P1s, not the minimal three-item cut below). Original suggestion:
+
 **Title:** Honest sky — unread/partial not live-green; panel shows errors; clock in window TZ.
 
 **Scope (one PR, no visual restyle, no cost redesign, no profile ACL):**
@@ -401,10 +494,19 @@ print the clock in the zone the probe already used.
 
 ## Appendix — tests run on this agent
 
+Round 1 (pre–Honest sky):
+
 ```
 python3 -m pytest tests -q
-...................................................                      [100%]
 51 passed in 0.26s
+```
+
+Round 2 / Honest sky (this PR):
+
+```
+python3 -m pytest tests -q
+..............................................................           [100%]
+62 passed in 0.23s
 
 node tests/test_constellation_logic.js
 ok - ConstellationLogic helpers

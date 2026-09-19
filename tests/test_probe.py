@@ -925,7 +925,7 @@ def test_build_snapshot_unread_jobs_is_error_not_quiet(tmp_path: Path):
 
 
 def test_build_snapshot_honors_tz(tmp_path: Path):
-    (tmp_path / "config.yaml").write_text("x: 1\n", encoding="utf-8")
+    (tmp_path / "cron").mkdir()
     now = datetime(2026, 9, 19, 15, 30, tzinfo=timezone.utc)
     utc = api.build_snapshot(now=now, tz_name="UTC", root=tmp_path)
     la = api.build_snapshot(now=now, tz_name="America/Los_Angeles", root=tmp_path)
@@ -961,4 +961,190 @@ def test_cli_probe_emits_json(tmp_path: Path):
     snap = json.loads(result.stdout)
     assert snap["demo"] is True
     assert snap["present"] is False
+
+
+def test_env_only_home_is_demo_not_live_quiet(tmp_path: Path):
+    hermes = tmp_path / ".hermes"
+    hermes.mkdir()
+    (hermes / ".env").write_text("HERMES_MODEL=x\n", encoding="utf-8")
+    env = {"HOME": str(tmp_path), "HERMES_HOME": str(hermes)}
+    snap = api.build_snapshot(
+        now=_dt("2026-09-19T10:00:00"),
+        environ=env,
+        tz_name="America/Los_Angeles",
+    )
+    assert snap["present"] is False
+    assert snap["demo"] is True
+    assert snap["runs"] == []
+
+
+def test_config_yaml_alone_is_demo_not_live_quiet(tmp_path: Path):
+    hermes = tmp_path / ".hermes"
+    hermes.mkdir()
+    (hermes / "config.yaml").write_text("profile: default\n", encoding="utf-8")
+    env = {"HOME": str(tmp_path), "HERMES_HOME": str(hermes)}
+    snap = api.build_snapshot(
+        now=_dt("2026-09-19T10:00:00"),
+        environ=env,
+        tz_name="America/Los_Angeles",
+    )
+    assert snap["present"] is False
+    assert snap["demo"] is True
+
+
+def test_cron_dir_is_enough_to_be_present(tmp_path: Path):
+    hermes = tmp_path / ".hermes"
+    (hermes / "cron").mkdir(parents=True)
+    env = {"HOME": str(tmp_path), "HERMES_HOME": str(hermes)}
+    snap = api.build_snapshot(
+        now=_dt("2026-09-19T10:00:00"),
+        environ=env,
+        tz_name="America/Los_Angeles",
+        root=hermes,
+    )
+    assert snap["present"] is True
+    assert snap["demo"] is False
+    assert snap["ok"] is True
+    assert snap["read_status"] == "ok"
+    assert snap["runs"] == []
+
+
+def test_usage_audit_bad_line_is_error_not_silent(tmp_path: Path):
+    _write_jobs(tmp_path, [{"id": "a1b2c3d4e5f6", "name": "Briefing"}])
+    (tmp_path / "cron" / "usage_audit.jsonl").write_text(
+        "{bad\n"
+        + json.dumps({
+            "ts": "2026-09-19T05:00:00.000Z",
+            "job_id": "a1b2c3d4e5f6",
+            "fire_id": "fire-tokens",
+            "total_tokens": 9,
+            "error": None,
+        })
+        + "\n",
+        encoding="utf-8",
+    )
+    payload = api.night_payload(
+        root=tmp_path, tz_name="America/Los_Angeles", now=_dt("2026-09-19T10:00:00"),
+    )
+    assert payload["ok"] is False
+    assert payload["degraded"] is True
+    assert payload["read_status"] == "partial"
+    assert any(e["kind"] == "usage_audit.jsonl" for e in payload["errors"])
+    assert len(payload["runs"]) == 1
+    assert payload["runs"][0]["status"] == "unknown"
+    assert payload["summary"]["unknown"] == 1
+    assert payload["summary"]["failed"] == 0
+
+
+def test_summarize_unknown_is_not_failed():
+    summary = api.summarize_runs([
+        {"status": "unknown", "tokens": 3, "usd": None},
+        {"status": None, "tokens": 1, "usd": None},
+        {"status": "failed", "tokens": None, "usd": None},
+    ])
+    assert summary["failed"] == 1
+    assert summary["unknown"] == 2
+    assert summary["runs"] == 3
+
+
+def test_daytime_finished_after_1800_is_not_overnight():
+    start, end = api.overnight_window(_dt("2026-09-19T10:00:00"), TZ)
+    runs = [
+        {
+            "job_id": "day_spill",
+            "started_at": "2026-09-18T09:00:00-07:00",
+            "finished_at": "2026-09-18T18:01:00-07:00",
+            "status": "completed",
+        },
+        {
+            "job_id": "night",
+            "started_at": "2026-09-18T22:00:00-07:00",
+            "finished_at": "2026-09-18T22:05:00-07:00",
+            "status": "completed",
+        },
+    ]
+    kept = api.filter_runs_in_window(runs, start, end, default_tz=TZ)
+    assert [r["job_id"] for r in kept] == ["night"]
+
+
+def test_hung_without_started_at_is_not_kept():
+    start, end = api.overnight_window(_dt("2026-09-19T10:00:00"), TZ)
+    runs = [
+        {"job_id": "nots", "started_at": None, "finished_at": None, "status": "running"},
+        {
+            "job_id": "spill",
+            "started_at": "2026-09-18T17:00:00-07:00",
+            "finished_at": None,
+            "status": "running",
+        },
+    ]
+    kept = api.filter_runs_in_window(runs, start, end, default_tz=TZ)
+    assert [r["job_id"] for r in kept] == ["spill"]
+
+
+def test_parent_ok_plus_kid_corrupt_is_partial_not_quiet(tmp_path: Path):
+    default = tmp_path
+    kid = tmp_path / "profiles" / "kid"
+    kid.mkdir(parents=True)
+    _write_jobs(default, [{
+        "id": "aaaaaaaaaaaa",
+        "name": "Parent briefing",
+        "last_run_at": "2026-09-18T22:00:00-07:00",
+        "last_status": "ok",
+    }])
+    (kid / "cron").mkdir(parents=True)
+    (kid / "cron" / "jobs.json").write_text("{not json", encoding="utf-8")
+    payload = api.night_payload(
+        root=default, tz_name="America/Los_Angeles", now=_dt("2026-09-19T10:00:00"),
+    )
+    assert payload["ok"] is False
+    assert payload["read_status"] == "partial"
+    assert payload["degraded"] is True
+    assert any(e["kind"] == "jobs.json" for e in payload["errors"])
+    assert len(payload["runs"]) == 1
+    assert payload["runs"][0]["status"] == "unknown"
+    assert payload["summary"]["failed"] == 0
+    assert payload["summary"]["unknown"] == 1
+
+
+def test_last_run_ok_pointer_is_unknown_not_completed(tmp_path: Path):
+    _write_jobs(tmp_path, [{
+        "id": "a1b2c3d4e5f6",
+        "name": "Briefing",
+        "last_run_at": "2026-09-18T22:00:00-07:00",
+        "last_status": "ok",
+    }])
+    start, end = api.overnight_window(_dt("2026-09-19T10:00:00"), TZ)
+    runs = api.filter_runs_in_window(
+        api.collect_home_runs(tmp_path, default_tz=TZ, profile="default"),
+        start, end, default_tz=TZ,
+    )
+    assert len(runs) == 1
+    assert runs[0]["status"] == "unknown"
+
+
+def test_sqlite_timeout_is_configured():
+    assert api.SQLITE_TIMEOUT == 1.5
+    assert api._HOME_MARKERS == ("cron", "state.db")
+
+
+def test_night_payload_audit_only_is_unknown_not_failed(tmp_path: Path):
+    _write_jobs(tmp_path, [{"id": "a1b2c3d4e5f6", "name": "Briefing"}])
+    (tmp_path / "cron" / "usage_audit.jsonl").write_text(
+        json.dumps({
+            "ts": "2026-09-19T05:00:00.000Z",
+            "job_id": "a1b2c3d4e5f6",
+            "total_tokens": 100,
+            "error": None,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    payload = api.night_payload(
+        root=tmp_path, tz_name="America/Los_Angeles", now=_dt("2026-09-19T10:00:00"),
+    )
+    assert payload["ok"] is True
+    assert payload["runs"][0]["status"] == "unknown"
+    assert payload["summary"]["failed"] == 0
+    assert payload["summary"]["unknown"] == 1
+    assert payload["degraded"] is False
 
