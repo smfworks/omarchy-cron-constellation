@@ -94,16 +94,11 @@ Panel {
     return root.starFail
   }
 
-  function probeCommand() {
-    var cmd = ["python3", root.probeScript]
-    if (root.timeZone)
-      cmd.push("--tz", root.timeZone)
-    return cmd
-  }
-
   Process {
     id: probe
-    command: root.probeCommand()
+    command: root.timeZone !== ""
+      ? ["python3", root.probeScript, "--tz", root.timeZone]
+      : ["python3", root.probeScript]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyProbe(text)
