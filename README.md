@@ -16,6 +16,12 @@ Plugin id: `smf.cron-constellation`. Twin of the Hermes Desktop digest
 a stuck probe, or a DEMO install can look like “all quiet” unless you read the
 glyph.
 
+## Demo
+
+Cron Constellation on Omarchy (mikesai6) — overnight starfield on the bar plus the constellation panel.
+
+https://github.com/smfworks/omarchy-cron-constellation/releases/download/demo/demo.mp4
+
 ## Requirements
 
 - **python3** — the widget probes Hermes cron storage with `probe.py` every 8s.
